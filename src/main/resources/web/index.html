@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>优化语义见证台</title>
+<style>
+  :root { --bg:#0f1420; --panel:#171e2e; --line:#2a3550; --fg:#dbe4f5; --dim:#8fa0c0;
+          --green:#2fbf71; --red:#e5484d; --amber:#f5a524; --gray:#8b93a7; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "SF Pro", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background:var(--bg); color:var(--fg); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:14px; }
+  header h1 { font-size:20px; margin:0; }
+  header .sub { color:var(--dim); font-size:13px; }
+  #controls { display:flex; flex-wrap:wrap; gap:10px 18px; padding:12px 20px; border-bottom:1px solid var(--line);
+              align-items:end; font-size:13px; }
+  #controls label { display:flex; flex-direction:column; gap:4px; color:var(--dim); }
+  select, input, button { background:#101828; color:var(--fg); border:1px solid var(--line);
+                          border-radius:6px; padding:6px 8px; font-size:13px; }
+  button { cursor:pointer; background:#1d2a44; }
+  button:hover { background:#27395c; }
+  #main { display:grid; grid-template-columns: 300px 1fr; gap:0; min-height:calc(100vh - 120px); }
+  #pairs { border-right:1px solid var(--line); padding:10px; overflow-y:auto; }
+  .pair-item { padding:8px 10px; border:1px solid var(--line); border-radius:8px; margin-bottom:8px; cursor:pointer; }
+  .pair-item:hover { background:#1a2338; }
+  .pair-item.sel { border-color:#4c6cb3; background:#1a2338; }
+  .pair-item .t { font-size:13px; margin-bottom:4px; }
+  .badge { display:inline-block; font-size:11px; padding:2px 8px; border-radius:10px; }
+  .b-eq   { background:rgba(47,191,113,.15); color:var(--green); border:1px solid var(--green); }
+  .b-ce   { background:rgba(229,72,77,.15);  color:var(--red);   border:1px solid var(--red); }
+  .b-rl   { background:rgba(245,165,36,.15); color:var(--amber); border:1px solid var(--amber); }
+  .b-um   { background:rgba(139,147,167,.15);color:var(--gray);  border:1px solid var(--gray); }
+  .b-none { background:transparent; color:var(--dim); border:1px dashed var(--line); }
+  #detail { padding:14px 18px; overflow-y:auto; }
+  #detail h2 { font-size:16px; margin:4px 0; }
+  #detail .desc { color:var(--dim); font-size:13px; margin-bottom:12px; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .col { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .col h3 { margin:2px 0 8px; font-size:13px; color:var(--dim); }
+  pre { font-family:"SF Mono", Menlo, monospace; font-size:12px; line-height:1.5; overflow-x:auto;
+        background:#0b101c; border:1px solid var(--line); border-radius:8px; padding:8px; margin:0 0 10px; }
+  table { border-collapse:collapse; width:100%; font-size:12px; }
+  td, th { border:1px solid var(--line); padding:3px 8px; text-align:left; }
+  th { color:var(--dim); font-weight:normal; }
+  .cebox { margin-top:14px; background:var(--panel); border:1px solid var(--red); border-radius:10px; padding:12px 14px; }
+  .cebox h3 { margin:0 0 8px; color:var(--red); font-size:14px; }
+  .kv { font-size:12px; margin:2px 0; }
+  .kv b { color:var(--dim); font-weight:normal; display:inline-block; min-width:90px; }
+  #history { padding:10px 20px 30px; border-top:1px solid var(--line); font-size:13px; }
+  #history h2 { font-size:14px; }
+  .run-row { display:flex; gap:12px; align-items:center; padding:4px 0; border-bottom:1px dashed var(--line); }
+  .muted { color:var(--dim); }
+  .sec { margin-top:14px; }
+  .sec h3 { font-size:13px; color:var(--dim); margin:0 0 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>优化语义见证台</h1>
+  <span class="sub">受限 SSA 重写的有界符号验证 · 反例 / 未知 / 等价严格区分 · 固定位宽整数语义</span>
+</header>
+
+<div id="controls">
+  <label>整数位宽
+    <select id="cfg-width"><option>8</option><option>16</option><option>32</option><option>64</option></select>
+  </label>
+  <label>溢出旗标 (nsw/nuw)
+    <select id="cfg-overflow">
+      <option value="RESPECT">遵守（溢出即毒化）</option>
+      <option value="IGNORE">忽略（按环绕处理）</option>
+    </select>
+  </label>
+  <label>浮点模式
+    <select id="cfg-float">
+      <option value="STRICT">严格（含 NaN/±Inf/±0）</option>
+      <option value="FINITE_ONLY">仅有限值</option>
+    </select>
+  </label>
+  <label>循环展开上限
+    <select id="cfg-unroll"><option>4</option><option>16</option><option selected>64</option><option>256</option><option>1024</option></select>
+  </label>
+  <label>翻译精炼口径
+    <select id="cfg-refine">
+      <option value="TARGET_REFINES_SOURCE">目标精化源（源未定义不约束）</option>
+      <option value="STRICT_BOTH_DEFINED">双侧均有定义且相等</option>
+    </select>
+  </label>
+  <label>评估预算
+    <select id="cfg-budget"><option value="20000">2 万</option><option value="200000" selected>20 万</option><option value="2000000">200 万</option></select>
+  </label>
+  <button id="btn-run-all">验证全部重写对</button>
+  <button id="btn-run-one">验证当前对</button>
+  <span id="run-msg" class="muted"></span>
+</div>
+
+<div id="main">
+  <div id="pairs"></div>
+  <div id="detail"><p class="muted">选择左侧重写对查看控制流与验证结果。</p></div>
+</div>
+
+<div id="history">
+  <h2>运行记录
+    <button id="btn-export">导出 JSON</button>
+    <button id="btn-import">导入 JSON</button>
+    <button id="btn-reset">清空数据库</button>
+    <input type="file" id="import-file" accept=".json" style="display:none">
+  </h2>
+  <div id="runs"></div>
+</div>
+
+<script>
+const STATUS_LABEL = {
+  PROVEN_EQUIVALENT: ['已证明等价','b-eq'],
+  COUNTEREXAMPLE:    ['发现反例','b-ce'],
+  RESOURCE_LIMIT:    ['资源上限(未知)','b-rl'],
+  UNMODELED:         ['语义未建模','b-um']
+};
+let fixtures = [];
+let lastResults = {};   // pairId -> {result, minimized}
+let selected = null;
+
+function cfg() {
+  return {
+    bitWidth: parseInt(document.getElementById('cfg-width').value),
+    overflowMode: document.getElementById('cfg-overflow').value,
+    floatMode: document.getElementById('cfg-float').value,
+    unrollLimit: parseInt(document.getElementById('cfg-unroll').value),
+    refinement: document.getElementById('cfg-refine').value,
+    evalBudget: parseInt(document.getElementById('cfg-budget').value)
+  };
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+function badge(status) {
+  const [label, cls] = STATUS_LABEL[status] || ['未验证','b-none'];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+async function loadFixtures() {
+  fixtures = await api('/api/fixtures');
+  renderPairs();
+}
+
+function renderPairs() {
+  const el = document.getElementById('pairs');
+  el.innerHTML = fixtures.map(f => {
+    const r = lastResults[f.id];
+    const b = r ? badge(r.result.status) : '<span class="badge b-none">未验证</span>';
+    return `<div class="pair-item ${selected===f.id?'sel':''}" onclick="selectPair('${f.id}')">
+      <div class="t">${f.title}</div>${b}</div>`;
+  }).join('');
+}
+
+async function selectPair(id) {
+  selected = id;
+  renderPairs();
+  const width = document.getElementById('cfg-width').value;
+  const v = await api(`/api/pair?id=${id}&width=${width}`);
+  const r = lastResults[id];
+  const d = document.getElementById('detail');
+  let html = `<h2>${v.title}</h2><div class="desc">${v.description}</div>`;
+  if (r) {
+    const [label, cls] = STATUS_LABEL[r.result.status];
+    html += `<div class="kv"><b>求解状态</b> <span class="badge ${cls}">${label}</span>
+      &nbsp; <span class="muted">已评估 ${r.result.explored} 个输入 · 输入空间 ${r.result.totalSpace} ·
+      ${r.result.exhaustive ? '穷举' : '采样'} · ${r.result.note||''}</span></div>`;
+  }
+  html += `<div class="cols">
+    <div class="col"><h3>源片段（重写前）</h3><pre>${esc(v.srcText)}</pre>${rangesHtml(r?.result?.srcRanges)}</div>
+    <div class="col"><h3>目标片段（重写后）</h3><pre>${esc(v.dstText)}</pre>${rangesHtml(r?.result?.dstRanges)}</div>
+  </div>`;
+  if (r && r.result.ce) html += ceHtml('反例（原始）', r.result.ce);
+  if (r && r.minimized) html += ceHtml('反例（缩减后，原例保留于运行记录）', r.minimized);
+  d.innerHTML = html;
+}
+
+function rangesHtml(ranges) {
+  if (!ranges || Object.keys(ranges).length === 0) return '';
+  const rows = Object.entries(ranges).map(([k,v]) => `<tr><td>%${k}</td><td>${esc(v)}</td></tr>`).join('');
+  return `<div class="sec"><h3>观测值域（探针输入）</h3><table><tr><th>SSA 值</th><th>范围</th></tr>${rows}</table></div>`;
+}
+
+function ceHtml(title, ce) {
+  const inputs = Object.entries(ce.inputsDisplay).map(([k,v]) => `<tr><td>%${k}</td><td>${esc(v)}</td></tr>`).join('');
+  const side = (name, s) => `
+    <div class="col"><h3>${name} — ${s.outcome === 'defined' ? '有定义' : '未定义/越界'}</h3>
+      <div class="kv"><b>结果</b>${s.value ? esc(s.value) : '（未定义）'}</div>
+      ${s.reason ? `<div class="kv"><b>原因</b>${esc(s.reason)}</div>` : ''}
+      <div class="kv"><b>路径条件</b>${s.path.map(esc).join(' → ') || '（无分支）'}</div>
+      <div class="sec"><h3>中间值</h3><pre>${s.values.map(([n,v]) => `%${n} = ${v}`).map(esc).join('\n')}</pre></div>
+    </div>`;
+  return `<div class="cebox"><h3>${title} · 类型 ${ce.kind}</h3>
+    <div class="sec"><h3>输入</h3><table><tr><th>参数</th><th>值</th></tr>${inputs}</table></div>
+    <div class="cols" style="margin-top:10px">${side('源片段', ce.source)}${side('目标片段', ce.target)}</div>
+  </div>`;
+}
+
+function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function runVerify(pairId) {
+  const msg = document.getElementById('run-msg');
+  msg.textContent = '验证中…';
+  try {
+    const resp = await api('/api/verify', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ pairId, config: cfg() })
+    });
+    for (const r of resp.results) {
+      lastResults[r.pairId] = { result: r, minimized: resp.minimized?.[r.pairId] || null };
+    }
+    msg.textContent = `运行 #${resp.runId} 已入库`;
+    renderPairs();
+    if (selected && lastResults[selected]) selectPair(selected);
+    else if (!selected && resp.results.length) selectPair(resp.results[0].pairId);
+    loadRuns();
+  } catch (e) { msg.textContent = '失败: ' + e.message; }
+}
+
+async function loadRuns() {
+  const runs = await api('/api/runs');
+  document.getElementById('runs').innerHTML = runs.map(r => {
+    const counts = {};
+    for (const res of r.results) counts[res.status] = (counts[res.status]||0)+1;
+    const summary = Object.entries(counts).map(([s,n]) => `${STATUS_LABEL[s]?.[0]||s}×${n}`).join(' · ');
+    return `<div class="run-row"><span class="muted">#${r.id} ${r.createdAt}</span>
+      <span>i${r.config.bitWidth} · ${r.config.overflowMode} · ${r.config.floatMode} · 展开${r.config.unrollLimit} · ${r.config.refinement}</span>
+      <span>${summary}</span></div>`;
+  }).join('') || '<span class="muted">暂无运行记录</span>';
+}
+
+document.getElementById('btn-run-all').onclick = () => runVerify('all');
+document.getElementById('btn-run-one').onclick = () => selected ? runVerify(selected) : alert('请先选择重写对');
+document.getElementById('btn-export').onclick = () => { window.location = '/api/export'; };
+document.getElementById('btn-reset').onclick = async () => {
+  if (!confirm('清空全部运行记录？')) return;
+  await api('/api/reset', { method: 'POST' });
+  loadRuns();
+};
+document.getElementById('btn-import').onclick = () => document.getElementById('import-file').click();
+document.getElementById('import-file').onchange = async (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const text = await f.text();
+  try {
+    const r = await api('/api/import', { method: 'POST', body: text });
+    alert(`已导入 ${r.imported} 条运行记录`);
+    loadRuns();
+  } catch (e) { alert('导入失败: ' + e.message); }
+  ev.target.value = '';
+};
+
+loadFixtures();
+loadRuns();
+</script>
+</body>
+</html>
